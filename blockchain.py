@@ -18,7 +18,9 @@ class Blockchain:
 
     def register_node(self, address):
         """
-        Add a new node to the list of nodes. Node = computer able to mine/complete transactions
+        Add a new node to the list of nodes. Node = computer able to mine/complete transactions.
+        Nodes will have different IP addresses, and can cause conflicts within blockchains, meaning that nodes may have different versions of a chain.
+        Since the main idea of a blockchain is to be decentralized, all nodes must have the same blockchain (we need consensus).  
 
         :param address: Address of node. Eg. 'http://192.168.0.5:5000'
         """
@@ -41,15 +43,18 @@ class Blockchain:
         :return: True if valid, False if not
         """
 
+        # Initialize variables to be used in logic
         last_block = chain[0]
         current_index = 1
 
+        # loop through whole chain 
         while current_index < len(chain):
             block = chain[current_index]
             print(f'{last_block}')
             print(f'{block}')
             print("\n-----------\n")
-            # Check that the hash of the block is correct
+
+            # Check that the hash of the previous block is the same as previous_hash (which is stored in the current block as a parameter)
             last_block_hash = self.hash(last_block)
             if block['previous_hash'] != last_block_hash:
                 return False
@@ -71,13 +76,14 @@ class Blockchain:
         :return: True if our chain was replaced, False if not
         """
 
+        # neighbours are the other nodes in the network
         neighbours = self.nodes
         new_chain = None
 
         # We're only looking for chains longer than ours
         max_length = len(self.chain)
 
-        # Grab and verify the chains from all the nodes in our network
+        # Loop through all nodes in the network and replace the current chain if we find a node with a longer chain than ours.
         for node in neighbours:
             response = requests.get(f'http://{node}/chain')
 
@@ -99,22 +105,23 @@ class Blockchain:
 
     def new_block(self, proof, previous_hash):
         """
-        Create a new Block in the Blockchain
+        Create a new block in the Blockchain
 
         :param proof: The proof given by the Proof of Work algorithm
         :param previous_hash: Hash of previous Block
         :return: New Block
         """
 
+        # build the block with the information that the block requires. 
         block = {
             'index': len(self.chain) + 1,
             'timestamp': time(),
             'transactions': self.current_transactions,
             'proof': proof,
-            'previous_hash': previous_hash or self.hash(self.chain[-1]),
+            'previous_hash': previous_hash
         }
 
-        # Reset the current list of transactions
+        # Reset the current list of transactions after they have been written to the block
         self.current_transactions = []
 
         self.chain.append(block)
@@ -139,6 +146,9 @@ class Blockchain:
 
     @property
     def last_block(self):
+        """
+        Get the final block in the chain
+        """
         return self.chain[-1]
 
     @staticmethod
@@ -146,7 +156,7 @@ class Blockchain:
         """
         Creates a SHA-256 hash of a Block
 
-        :param block: Block
+        :param block: A block in the blockchain
         """
 
         # We must make sure that the Dictionary is Ordered, or we'll have inconsistent hashes
@@ -164,9 +174,11 @@ class Blockchain:
         :return: <int>
         """
 
+        # get proof of last block and also hash of last block
         last_proof = last_block['proof']
         last_hash = self.hash(last_block)
 
+        # search for the number that satisfied the condition defined for achieving 4 leading 0's
         proof = 0
         while self.valid_proof(last_proof, proof, last_hash) is False:
             proof += 1
@@ -176,7 +188,7 @@ class Blockchain:
     @staticmethod
     def valid_proof(last_proof, proof, last_hash):
         """
-        Validates the Proof
+        Validates the Proof of Work by checking if the 4 leading numbers in the hash is 0000. 
 
         :param last_proof: <int> Previous Proof
         :param proof: <int> Current Proof
@@ -192,7 +204,7 @@ class Blockchain:
 
 # Instantiate the Node
 app = Flask(__name__)
-app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False # required workaround for not getting internal error 500
+app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False # required workaround for not getting internal error 500 with postman
 
 # Generate a globally unique address for this node
 node_identifier = str(uuid4()).replace('-', '')
@@ -203,6 +215,9 @@ blockchain = Blockchain()
 
 @app.route('/mine', methods=['GET'])
 def mine():
+    """
+    Mine function rewarding the miner with 1 coin whenever the miner finds the proof first.
+    """
     # We run the proof of work algorithm to get the next proof...
     last_block = blockchain.last_block
     proof = blockchain.proof_of_work(last_block)
@@ -219,6 +234,7 @@ def mine():
     previous_hash = blockchain.hash(last_block)
     block = blockchain.new_block(proof, previous_hash)
 
+    # build response to the mine request
     response = {
         'message': "New Block Forged",
         'index': block['index'],
@@ -231,6 +247,9 @@ def mine():
 
 @app.route('/transactions/new', methods=['POST'])
 def new_transaction():
+    """
+    Adds new transaction that will be appended to the next forged block. 
+    """
     values = request.get_json()
 
     # Check that the required fields are in the POST'ed data
@@ -238,7 +257,7 @@ def new_transaction():
     if not all(k in values for k in required):
         return 'Missing values', 400
 
-    # Create a new Transaction
+    # Create a new transaction
     index = blockchain.new_transaction(values['sender'], values['recipient'], values['amount'])
 
     response = {'message': f'Transaction will be added to Block {index}'}
@@ -247,6 +266,9 @@ def new_transaction():
 
 @app.route('/chain', methods=['GET'])
 def full_chain():
+    """
+    Display the full chain with all attributes of each block displayed
+    """
     response = {
         'chain': blockchain.chain,
         'length': len(blockchain.chain),
@@ -256,6 +278,9 @@ def full_chain():
 
 @app.route('/nodes/register', methods=['POST'])
 def register_nodes():
+    """
+    Register a new node to the network
+    """
     values = request.get_json()
 
     nodes = values.get('nodes')
@@ -274,6 +299,11 @@ def register_nodes():
 
 @app.route('/nodes/resolve', methods=['GET'])
 def consensus():
+    """
+    Consensus code to verify that the chain in our current node is valid. If it is not valid, we replace the chain with the longest chain found in another node.
+    """
+
+    # Check if the chain needed to be replaced
     replaced = blockchain.resolve_conflicts()
 
     if replaced:
